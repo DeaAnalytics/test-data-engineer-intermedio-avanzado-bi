@@ -1,0 +1,353 @@
+CREATE PROCEDURE [dbo].[BICargaHCartera]
+	 @CargaControl  INT	= 0 --0 para todos los controles
+	,@MigraHistoria	VARCHAR(2)= NULL
+	,@MesesHistoria	INT = NULL
+	,@debug			INT = 0
+ AS
+ BEGIN
+ 
+ /*
+ DataMart 		Ventas
+ CONTROL 1 - Indicadores de Saldos
+ CONTROL 2 - Indicadores de Pagos
+ */
+ 
+
+
+IF (SELECT ValorNum FROM dbo.DwhVtaBitConfiguracion WHERE Consecutivo=0 AND Clave='EsPrueba')=1 
+SET @debug=1
+ 
+DECLARE @Fechadebug DATETIME
+SET @Fechadebug = GETDATE()
+DECLARE @Consecutivo INT
+SET @Consecutivo=2
+
+
+	 /* Configuración de la Migración */
+	DECLARE
+	@FechaInicioHistoria INT, 	/* En Caso de Migrar Toda la historia Comenzara a partir de esta Fecha */
+	@FechaFinHistoria    INT, /*se usa para cuando quiero migrar solo un periodo especifico, y se usa entre en migrar historia*/
+	@FechaInicioActual   INT    /* En Caso de Migrar Solo el mes actual se genera una fecha donde TENDra cuantos meses atras migrara */
+
+
+   DECLARE @link VARCHAR(200), @bd  VARCHAR(50),  @server VARCHAR(50),@user VARCHAR(50), @SQL VARCHAR(500)
+   SELECT @bd     = (SELECT LTRIM(RTRIM(valorchar)) FROM dbo.DwhVtaBitConfiguracion WHERE clave='bd' AND consecutivo=2)
+   SELECT @server = (SELECT LTRIM(RTRIM(valorchar)) FROM dbo.DwhVtaBitConfiguracion WHERE clave='server' AND consecutivo=2)
+   SELECT @user   = (SELECT LTRIM(RTRIM(valorchar)) FROM dbo.DwhVtaBitConfiguracion WHERE clave='user' AND consecutivo=2)
+   SELECT @link   = @server+'.'+@bd+'.'+@user+'.'
+
+	IF @MigraHistoria IS NULL					
+		SELECT @MigraHistoria = UPPER((	SELECT Ltrim(Rtrim(ValorChar)) FROM DwhVtaBitConfiguracion WHERE Clave='MigrarHistoria' AND Consecutivo = 2))
+
+	IF @MesesHistoria IS NULL					
+		SELECT @MesesHistoria 	    = (	SELECT ValorNum FROM DwhVtaBitConfiguracion WHERE Clave = 'MesesHistoria' AND Consecutivo = 2)
+		SELECT @FechaInicioHistoria = (	SELECT Ltrim(Rtrim(valorchar)) FROM DwhVtaBitConfiguracion WHERE clave='FechaInicioHistoria' AND Consecutivo = 2)
+		SELECT @FechaFinHistoria	= ( SELECT Ltrim(Rtrim(valorchar)) FROM DwhVtaBitConfiguracion WHERE clave='FechaFinHistoria' AND Consecutivo = 2)
+		SELECT @FechaInicioActual   = Year (DATEADD(MM, @MesesHistoria, GETDATE())) * 10000  + Month(DATEADD(MM, @MesesHistoria, GETDATE())) * 100 + 1
+     	
+
+
+
+	 DECLARE
+	 	@FechaIni		VARCHAR(8),
+		@FechaFin		VARCHAR(8),
+		@FechaUpdated		DATETIME
+
+
+		IF @MigraHistoria='SI'												
+			BEGIN
+				IF @CargaControl = 0
+					BEGIN
+						Truncate Table dbo.DwhVtaHCartera
+
+						SELECT @FechaIni	 = @FechaInicioHistoria 
+						SELECT @FechaUpdated = DATEADD(dd, -1, GETDATE())
+						SELECT @FechaFin	 = CONVERT(VARCHAR, @FechaUpdated, 112)
+					END
+					ELSE
+					BEGIN
+						DELETE dbo.DwhVtaHCartera
+						WHERE Control = @CargaControl
+
+							SELECT @FechaIni	 = @FechaInicioHistoria 
+							SELECT @FechaUpdated = DATEADD(dd, -1, GETDATE())
+							SELECT @FechaFin	 = CONVERT(VARCHAR, @FechaUpdated, 112)
+					END			
+			END
+			ELSE
+			BEGIN
+				IF @MigraHistoria='NO'
+					BEGIN
+						SELECT @FechaIni	 = @FechaInicioActual
+						SELECT @FechaUpdated = DATEADD(dd, -1, Getdate())
+						SELECT @FechaFin	 = CONVERT(VARCHAR, @FechaUpdated, 112)					
+					END
+					ELSE 
+					BEGIN 
+						SELECT @FechaIni	 = @FechaInicioHistoria 
+						SELECT @FechaFin	 = @FechaFinHistoria 
+					END
+			END 		
+
+
+		DECLARE @FechaFinCiclo INT,
+				@FechaInicioCiclo INT
+
+		SELECT @FechaInicioCiclo = @FechaIni
+		SELECT @FechaFinCiclo = @FechaFin
+
+		IF   @FechaFinCiclo < @FechaIni		
+			BEGIN 
+				SELECT @FechaIni = @FechaFinCiclo
+			END
+
+
+		WHILE ( @FechaIni <= @FechaFinCiclo )  
+		BEGIN
+			IF (LEFT(@FechaIni, 6) = LEFT(@FechaFinCiclo, 6) AND LEFT(@FechaIni, 6) = LEFT(CONVERT(VARCHAR,@FechaUpdated,112), 6))
+				BEGIN
+					SELECT @FechaFin = @FechaFinCiclo
+				END
+			ELSE
+				BEGIN
+					SELECT @FechaFin = CONVERT(VARCHAR,DATEADD(dd,-1, DATEADD(mm,1, CONVERT(DATETIME, @FechaIni))),112)
+				END
+
+
+		PRINT '[Periodo:  del ' +  @FechaIni + ' al ' + @FechaFin + ' ]'
+
+		DECLARE
+			@FechaIniDate	VARCHAR(10),	
+			@FechaFinDate	VARCHAR(10),	
+			@Control		INT
+
+   			SELECT @FechaIniDate = CONVERT(VARCHAR,@FechaIni)
+			SELECT @FechaFinDate = CONVERT(VARCHAR,@FechaFin)
+
+
+			Truncate Table dbo.DwhVtaTempCartera
+
+
+
+	IF @CargaControl = 0 or @CargaControl = 1
+		BEGIN	
+
+			SELECT @Control = 1
+			PRINT '[Control: ' +  CONVERT(VARCHAR(2),@Control) + ']'
+			SELECT @SQL= 'EXEC '+ @link + 'CVtaCarteraSel ''' + CONVERT(VARCHAR(10),@FechaIniDate,120) 
+						 + ''', ''' +  CONVERT(VARCHAR(10),@FechaFinDate,120) + ''',' + CONVERT(VARCHAR(2),@Control)
+
+			PRINT(@SQL)				
+			INSERT INTO [DwhVentas].[dbo].[DwhVtaTempCartera]
+
+			   (	Control,IdFechaControl,AnioMes,IdEmpresa,IdCliente,IdClasificacionMyA,IdClasificacionVyA,
+					IdGiro,IdGiroIndustria,IdTipoDocumento,IdMoneda,IdEsClienteNuevoMes,IdEsClienteNuevoAño,
+					IdEsClienteNuevoMesLegal,IdEsClienteNuevoAñoLegal,IdClienteUnico,IdEstatusLegal,IdTipoCliente,
+					IdTipoProducto,SaldoMN,SaldoUSD,SaldoXVencerMN,SaldoXVencerUSD,SaldoVencidoMN,SaldoVencidoUSD,
+					SaldoVencido30DiasMN,SaldoVencido30DiasUSD,SaldoVencido1a10DiasMN,SaldoVencido1a10DiasUSD,
+					SaldoVencido11a20DiasMN,SaldoVencido11a20DiasUSD,SaldoVencido21a30DiasMN,SaldoVencido21a30DiasUSD,
+					SaldoVencido90DiasMN,SaldoVencido90DiasUSD,SaldoVencidoM90DiasMN,SaldoVencidoM90DiasUSD,
+					SaldoVencidoXFacturasMesMN,SaldoVencidoXFacturasMesUSD,SaldoVencidoLegalMesMN,
+					SaldoVencidoLegalMesUSD,VentasNetasCartera,VentasNetasCarteraUSD,SaldoAFavorMN,SaldoAFavorUSD,
+					ChequesDevueltosMN, ChequesDevueltosUSD)
+
+			EXEC (@SQL)
+		   
+	  
+		IF @debug= 1 
+			BEGIN
+				INSERT INTO dbo.DwhVtaBitActividad
+				(Consecutivo, FechaMigracion, FechaInicio, FechaFin, Servidor, BD, SP, Tabla, NumError, DescError, EmailReport, HuboError)
+				SELECT @Consecutivo AS Consecutivo, CONVERT(VARCHAR(10),@Fechadebug,120) AS FechaMigracion, @Fechadebug AS FechaInicio, 
+				GETDATE() AS FechaFin, @@ServerName AS Servidor, Db_Name() AS BD, OBJECT_NAME(@@PROCID) AS SP, @SQL AS Tabla,
+				'' AS NumError, 'Debug' AS DescError, '' AS EmailReport, 0 AS HuboError
+
+				SELECT @Fechadebug = GETDATE()
+			END	
+ 
+
+		END	
+		
+
+	IF @CargaControl = 0 or @CargaControl = 2
+		BEGIN
+			SELECT @Control = 2
+			PRINT '[Control: ' +  CONVERT(VARCHAR(2),@Control) + ']'
+			SELECT @SQL= 'EXEC '+ @link + 'CVtaCarteraSel ''' + CONVERT(VARCHAR(10),@FechaIniDate,120) 
+						 + ''', ''' +  CONVERT(VARCHAR(10),@FechaFinDate,120) + ''',' + CONVERT(VARCHAR(2),@Control)
+
+			PRINT(@SQL)
+
+			INSERT INTO [DwhVentas].[dbo].[DwhVtaTempCartera]
+				(	Control,IdFechaControl,AnioMes,IdUbicacion,IdEmpresa,IdCliente,IdClasificacionMyA,IdClasificacionVyA,
+					IdGiro,IdGiroIndustria,IdTipoDocumento,IdDocumento,IdMoneda,IdEsClienteNuevoMes,IdEsClienteNuevoAño,
+					IdEsClienteNuevoMesLegal,IdEsClienteNuevoAñoLegal,IdClienteUnico,IdEstatusLegal,IdTipoCliente,
+					IdTipoProducto,PagoMN,PagoUSD,PagoRecuperacionMN,PagoRecuperacionUSD)
+
+		   EXEC (@SQL)
+		   
+
+			IF @debug= 1 
+				BEGIN
+					INSERT INTO dbo.DwhVtaBitActividad
+					(Consecutivo, FechaMigracion, FechaInicio, FechaFin, Servidor, BD, SP, Tabla, NumError, DescError, EmailReport, HuboError)
+					SELECT @Consecutivo AS Consecutivo, CONVERT(VARCHAR(10),@Fechadebug,120) AS FechaMigracion, @Fechadebug AS FechaInicio, 
+					GETDATE() AS FechaFin, @@ServerName AS Servidor, Db_Name() AS BD, OBJECT_NAME(@@PROCID) AS SP, @SQL AS Tabla, 
+					'' AS NumError, 'Debug' AS DescError, '' AS EmailReport, 0 AS HuboError
+
+					SELECT @Fechadebug = GETDATE()
+				END	
+	   
+
+		END	
+	END	
+
+			
+		IF @debug= 1 
+			BEGIN
+				INSERT INTO dbo.DwhVtaBitActividad
+				(Consecutivo, FechaMigracion, FechaInicio, FechaFin, Servidor, BD, SP, Tabla, NumError, DescError, EmailReport, HuboError)
+				SELECT @Consecutivo AS Consecutivo, CONVERT(VARCHAR(10),@Fechadebug,120) AS FechaMigracion, @Fechadebug AS FechaInicio, 
+				GETDATE() AS FechaFin, @@ServerName AS Servidor,Db_Name() AS BD, OBJECT_NAME(@@PROCID) AS SP, 'CargaDwhVtaCatalogosCartera' AS Tabla, 
+				'' AS NumError, 'Debug' AS DescError, '' AS EmailReport, 0 AS HuboError
+
+				SELECT @Fechadebug = GETDATE()
+			END	
+ 
+
+		IF @MigraHistoria <>'SI'
+			BEGIN
+				IF @CargaControl = 0
+					BEGIN
+						PRINT('Borre sin control')
+						Delete 	dbo.DwhVtaHCartera
+						WHERE 	IdFechaControl Between @FechaIni AND @FechaFin and Control <>21
+					END
+				ELSE
+					BEGIN
+						PRINT('Borre con control')
+						Delete 	dbo.DwhVtaHCartera
+						WHERE 	IdFechaControl Between @FechaIni AND @FechaFin AND Control = @CargaControl
+					END
+			
+				END
+
+  
+		IF @debug= 1 
+			BEGIN
+				INSERT INTO dbo.DwhVtaBitActividad
+				(Consecutivo, FechaMigracion, FechaInicio, FechaFin, Servidor, BD, SP, Tabla, NumError, DescError, EmailReport, HuboError)
+				SELECT @Consecutivo AS Consecutivo, CONVERT(VARCHAR(10),@Fechadebug,120) AS FechaMigracion, @Fechadebug AS FechaInicio, 
+				GETDATE() AS FechaFin, @@ServerName AS Servidor, Db_Name() AS BD, OBJECT_NAME(@@PROCID) AS SP, 'Delete DwhVtaHCartera' AS Tabla, 
+				'' AS NumError, 'Debug' AS DescError, '' AS EmailReport, 0 AS HuboError
+
+				SELECT @Fechadebug = GETDATE()
+			END	
+
+
+	/*ESTRELLA DE CARTERA*/
+
+		INSERT INTO DwhVentas.dbo.DwhVtaHCartera (
+			Control
+			,IdFechaControl,IdFechaUltMig,AnioMes,IdClasificacionMyA,IdClasificacionVyA,IdCliente,IdClienteUnico,IdDocumento
+			,IdDocumentoOriginal,IdEmpresa,IdEsClienteNuevoAño,IdEsClienteNuevoAñoLegal,IdEsClienteNuevoMes,IdEsClienteNuevoMesLegal
+			,IdEsSaldo,IdEstatusLegal,IdFormaPago,IdGiro,IdGiroIndustria,IdMoneda,IdMotivoProforma,IdTipoCliente,IdTipoDocumento,
+			IdTipoMovimiento,IdTipoProducto,IdUbicacion,FechaVencimiento,BonificacionMesActualMN,BonificacionMesActualUSD,CancelacionesMN
+			,CancelacionesUSD,CantidadDocumentosAfectados,CantidadProformas,ContadorDiasAtraso,ContadorDiasAtrasoPagos,ContadorDiasPago
+			,ContadorDiasPlazo,DevolucionesCarteraMN,DevolucionesCarteraUSD,DiasAtraso,DiasAtrasoPagos,DiasPago,DiasPlazo,ExclusionesMN
+			,ExclusionesUSD,ImporteProformaMN,ImporteProformaUSD,NoCuentasConRecuperacion,NoCuentasConSaldo,NoCuentasNuevasLegal
+			,ObjetivoInicialMN,ObjetivoInicialUSD,PagoMN,PagoUSD,PagoRecuperacionMN,PagoRecuperacionUSD,RecuperacionLegalMN,RecuperacionLegalUSD
+			,RecuperacionMN,RecuperacionUSD,SaldoLegalMN,SaldoLegalUSD,SaldoMN,SaldoUSD,SaldoVencido11a20DiasMN,SaldoVencido11a20DiasUSD
+			,SaldoVencido1a10DiasMN,SaldoVencido1a10DiasUSD,SaldoVencido21a30DiasMN,SaldoVencido21a30DiasUSD,SaldoVencido30DiasMN,SaldoVencido30DiasUSD
+			,SaldoVencido90DiasMN,SaldoVencido90DiasUSD,SaldoVencidoLegalMesMN,SaldoVencidoLegalMesUSD,SaldoVencidoM90DiasMN,SaldoVencidoM90DiasUSD
+			,SaldoVencidoMN,SaldoVencidoUSD,SaldoVencidoXFacturasMesMN,SaldoVencidoXFacturasMesUSD,SaldoXVencerMN,SaldoXVencerUSD,VentasNetasCartera
+			,VentasNetasCarteraUSD,SaldoAFavorMN,SaldoAFavorUSD,ChequesDevueltosMN,ChequesDevueltosUSD,BonificacionMesActualMO,CancelacionesMO
+			,DevolucionesCarteraMO,ExclusionesMO,ImporteProformaMO,ObjetivoInicialMO,PagoMO,PagoRecuperacionMO,RecuperacionLegalMO,RecuperacionMO
+			,SaldoLegalMO,SaldoMO,SaldoVencido11a20DiasMO,SaldoVencido1a10DiasMO,SaldoVencido21a30DiasMO,SaldoVencido30DiasMO,SaldoVencido90DiasMO
+			,SaldoVencidoLegalMesMO,SaldoVencidoM90DiasMO,SaldoVencidoMO,SaldoVencidoXFacturasMesMO,SaldoXVencerMO,VentasNetasCarteraMO,SaldoAFavorMO
+			,ChequesDevueltosMO
+		)   
+		SELECT	 Control
+				,IsNull(IdFechaControl,(@FechaFin))	,getdate()
+				,IsNull(AnioMes,-1),				IsNull(IdClasificacionMyA,-1),			IsNull(IdClasificacionVyA,-1),	IsNull(IdCliente,-1)
+				,IsNull(IdClienteUnico,-1),			IsNull(IdDocumento,-1),					IsNull(IdDocumentoOriginal,-1),	IsNull(IdEmpresa,-1)
+				,IsNull(IdEsClienteNuevoAño,-1),	IsNull(IdEsClienteNuevoAñoLegal,-1),	IsNull(IdEsClienteNuevoMes,-1),	IsNull(IdEsClienteNuevoMesLegal,-1)
+				,IsNull(IdEsSaldo,-1),				IsNull(IdEstatusLegal,-1),				IsNull(IdFormaPago,-1),			IsNull(IdGiro,-1)
+				,IsNull(IdGiroIndustria,-1),		IsNull(IdMoneda,-1),					IsNull(IdMotivoProforma,-1),	IsNull(IdTipoCliente,-1)
+				,IsNull(IdTipoDocumento,-1),		IsNull(IdTipoMovimiento,-1),			IsNull(IdTipoProducto,-1),		IsNull(IdUbicacion,-1), FechaVencimiento
+				,SUM(BonificacionMesActualMN),		SUM(BonificacionMesActualUSD),			SUM(CancelacionesMN),			SUM(CancelacionesUSD)
+				,SUM(CantidadDocumentosAfectados),	SUM(CantidadProformas),					SUM(ContadorDiasAtraso),		SUM(ContadorDiasAtrasoPagos)
+				,SUM(ContadorDiasPago),				SUM(ContadorDiasPlazo),					SUM(DevolucionesCarteraMN),		SUM(DevolucionesCarteraUSD)
+				,SUM(DiasAtraso),					SUM(DiasAtrasoPagos),					SUM(DiasPago),					SUM(DiasPlazo)
+				,SUM(ExclusionesMN),				SUM(ExclusionesUSD),					SUM(ImporteProformaMN),			SUM(ImporteProformaUSD)
+				,SUM(NoCuentasConRecuperacion),		SUM(NoCuentasConSaldo),					SUM(NoCuentasNuevasLegal),		SUM(ObjetivoInicialMN)
+				,SUM(ObjetivoInicialUSD),			SUM(PagoMN),							SUM(PagoUSD),					SUM(PagoRecuperacionMN)
+				,SUM(PagoRecuperacionUSD),			SUM(RecuperacionLegalMN),				SUM(RecuperacionLegalUSD),		SUM(RecuperacionMN)
+				,SUM(RecuperacionUSD),				SUM(SaldoLegalMN),						SUM(SaldoLegalUSD),				SUM(SaldoMN), SUM(SaldoUSD)
+				,SUM(SaldoVencido11a20DiasMN),		SUM(SaldoVencido11a20DiasUSD),			SUM(SaldoVencido1a10DiasMN),	SUM(SaldoVencido1a10DiasUSD)
+				,SUM(SaldoVencido21a30DiasMN),		SUM(SaldoVencido21a30DiasUSD),			SUM(SaldoVencido30DiasMN),		SUM(SaldoVencido30DiasUSD)
+				,SUM(SaldoVencido90DiasMN),			SUM(SaldoVencido90DiasUSD),				SUM(SaldoVencidoLegalMesMN),	SUM(SaldoVencidoLegalMesUSD)
+				,SUM(SaldoVencidoM90DiasMN),		SUM(SaldoVencidoM90DiasUSD),			SUM(SaldoVencidoMN),			SUM(SaldoVencidoUSD)
+				,SUM(SaldoVencidoXFacturasMesMN),	SUM(SaldoVencidoXFacturasMesUSD),		SUM(SaldoXVencerMN),			SUM(SaldoXVencerUSD)
+				,SUM(VentasNetasCartera),			SUM(VentasNetasCarteraUSD),				SUM(SaldoAFavorMN),				SUM(SaldoAFavorUSD)
+				,SUM(ChequesDevueltosMN),			SUM(ChequesDevueltosUSD),				SUM(BonificacionMesActualMO),	SUM(CancelacionesMO)
+				,SUM(DevolucionesCarteraMO),		SUM(ExclusionesMO),						SUM(ImporteProformaMO),			SUM(ObjetivoInicialMO)
+				,SUM(PagoMO),						SUM(PagoRecuperacionMO),				SUM(RecuperacionLegalMO),		SUM(RecuperacionMO)
+				,SUM(SaldoLegalMO),					SUM(SaldoMO),							SUM(SaldoVencido11a20DiasMO),	SUM(SaldoVencido1a10DiasMO)
+				,SUM(SaldoVencido21a30DiasMO),		SUM(SaldoVencido30DiasMO),				SUM(SaldoVencido90DiasMO),		SUM(SaldoVencidoLegalMesMO)
+				,SUM(SaldoVencidoM90DiasMO),		SUM(SaldoVencidoMO),					SUM(SaldoVencidoXFacturasMesMO),SUM(SaldoXVencerMO)
+				,SUM(VentasNetasCarteraMO),			SUM(SaldoAFavorMO),						SUM(ChequesDevueltosMO)
+		FROM  [DwhVentas].[dbo].[DwhVtaTempCartera]
+		WHERE Control <> 21
+		GROUP BY Control, IdFechaControl	
+		,Isnull(AnioMes,-1)						,IsNull(IdEsSaldo,-1)
+		,IsNull(IdEstatusLegal,-1)
+		,IsNull(IdClasificacionMyA,-1)			,IsNull(IdFormaPago,-1)
+		,IsNull(IdClasificacionVyA,-1)			,IsNull(IdGiro,-1)
+		,IsNull(IdCliente,-1)					,IsNull(IdGiroIndustria,-1)
+		,IsNull(IdClienteUnico,-1)				,IsNull(IdMoneda,-1)
+		,IsNull(IdDocumento,-1)					,IsNull(IdMotivoProforma,-1)
+		,IsNull(IdDocumentoOriginal,-1)			,IsNull(IdTipoCliente,-1)
+		,IsNull(IdEmpresa,-1)					,IsNull(IdTipoDocumento,-1)
+		,IsNull(IdEsClienteNuevoAño,-1)			,IsNull(IdTipoMovimiento,-1)
+		,IsNull(IdEsClienteNuevoAñoLegal,-1)	,IsNull(IdTipoProducto,-1)
+		,IsNull(IdEsClienteNuevoMes,-1)			,IsNull(IdUbicacion,-1)
+		,IsNull(IdEsClienteNuevoMesLegal,-1)	,FechaVencimiento
+
+
+		SELECT @FechaIni = CONVERT(VARCHAR,DATEADD(mm, 1, CONVERT(DATETIME, @FechaIni)),112)
+		
+	   
+		IF @debug= 1 
+			BEGIN
+				INSERT INTO dbo.DwhVtaBitActividad
+				(Consecutivo, FechaMigracion, FechaInicio, FechaFin, Servidor, BD, SP, Tabla, NumError, DescError, EmailReport, HuboError)
+				SELECT @Consecutivo AS Consecutivo, CONVERT(VARCHAR(10),@Fechadebug,120) AS FechaMigracion, @Fechadebug AS FechaInicio, 
+				GETDATE() AS FechaFin, @@ServerName AS Servidor, Db_Name() AS BD, OBJECT_NAME(@@PROCID) AS SP, 'Insert DwhVtaHCartera' AS Tabla, 
+				'' AS NumError, 'Debug' AS DescError, '' AS EmailReport, 0 AS HuboError
+
+				SELECT @Fechadebug = GETDATE()
+			END	
+
+
+		CONTINUE
+
+	END
+
+		SELECT IdCliente	   = ISNULL(IdCliente,-1)
+			 , ClaClienteUnico = ISNULL(ClaClienteUnico,-1) 
+		INTO ##TmpClienteUnicoC
+		FROM  DwhVtaCatCliente 
+		GROUP BY ISNULL(IdCliente,-1), ISNULL(ClaClienteUnico,-1) 
+
+
+		UPDATE DwhVtaHCartera 
+		SET IdClienteUnico = ClaClienteUnico
+		FROM  DwhVtaHCartera C 
+		INNER JOIN ##TmpClienteUnicoC Tmp		ON C.IdCliente = Tmp.IdCliente
+		WHERE C.IdCliente IN (SELECT C2.IdCliente FROM DwhVtaHCartera C2 GROUP BY C2.IdCliente HAVING COUNT(DISTINCT(C2.IdClienteUnico)) > 1)
+
+		DROP TABLE ##TmpClienteUnicoC
+
+
+END
