@@ -1,6 +1,6 @@
 
 
-En caso de estar interesado en aplicar al test puede contactar por correo a [deacero](mailto:lsilva@deacero.com)
+En caso de estar interesado en aplicar al test puede contactar por correo a [lsilva@deacero.com](mailto:lsilva@deacero.com)
 .
 
 Todas las respuestas pueden hacerse en un documento con la herramienta que mejor le convenga. El dashboard puede ser publicado en tableu public y agregar la liga o presentar el reporte en archivo PDF o HTML.
